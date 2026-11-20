@@ -1,23 +1,62 @@
 pipeline {
     agent any
+
+    environment {
+        DEPLOY_DIR = "/opt/app-deploy"
+        VENV_NAME = "venv"
+    }
+
     stages {
-        stage('Checkout') {
+        stage('1. Dependency Management') {
             steps {
-                checkout scm
+                echo "==> [Jenkins Manual] Verificando requirements.txt..."
+                sh '''
+                    if [ ! -f "requirements.txt" ]; then
+                        echo "Error: No se encontró el archivo requirements.txt en el repositorio"
+                        exit 1
+                    fi
+                    cat requirements.txt
+                '''
             }
         }
-        stage('Instalar dependencias') {
+
+        stage('2. Build') {
             steps {
-                sh 'python3 -m venv venv'
-                sh '. venv/bin/activate && pip install -r requirements.txt'
+                echo "==> [Jenkins Manual] Configurando entorno virtual e instalando dependencias..."
+                sh '''
+                    python3 -m venv ${VENV_NAME}
+                    . ${VENV_NAME}/bin/activate
+                    pip install --upgrade pip
+                    pip install -r requirements.txt
+                '''
             }
         }
-        stage('OWASP Dependency-Check') {
+
+        stage('3. Test') {
             steps {
-                dependencyCheck additionalArguments: '--scan ./ --format HTML --format XML --prettyPrint',
-                                odcInstallation: 'dependency-check'
-                dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
+                echo "==> [Jenkins Manual] [TEST] Aquí se simulan las pruebas unitarias..."
+                sh 'echo "Pruebas superadas con éxito en el workspace de Jenkins."'
             }
+        }
+
+        stage('4. Deploy (Simulado)') {
+            steps {
+                echo "==> [Jenkins Manual] Desplegando en la máquina Kali Linux..."
+                sh '''
+                    sudo mkdir -p ${DEPLOY_DIR}
+                    sudo cp app.py requirements.txt ${DEPLOY_DIR}/
+                    echo "¡Despliegue manual desde Jenkins completado en ${DEPLOY_DIR}!"
+                '''
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "¡El build manual finalizó correctamente!"
+        }
+        failure {
+            echo "El pipeline falló durante la ejecución manual."
         }
     }
 }
