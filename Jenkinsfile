@@ -2,61 +2,91 @@ pipeline {
     agent any
 
     environment {
-        DEPLOY_DIR = "/opt/app-deploy"
-        VENV_NAME = "venv"
+        REGISTRY     = 'registry.ejemplo.com'
+        IMAGE_NAME   = 'mi-app'
+        IMAGE_TAG    = "${env.BUILD_NUMBER}"
+        FULL_IMAGE   = "${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
+        DEPLOY_HOST  = 'servidor.ejemplo.com'
+    }
+
+    options {
+        timeout(time: 30, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '10'))
     }
 
     stages {
-        stage('1. Dependency Management') {
+        stage('Checkout') {
             steps {
-                echo "==> [Jenkins Manual] Verificando requirements.txt..."
-                sh '''
-                    if [ ! -f "requirements.txt" ]; then
-                        echo "Error: No se encontró el archivo requirements.txt en el repositorio"
-                        exit 1
-                    fi
-                    cat requirements.txt
-                '''
+                checkout scm
             }
         }
 
-        stage('2. Build') {
+        stage('Construcción') {
             steps {
-                echo "==> [Jenkins Manual] Configurando entorno virtual e instalando dependencias..."
-                sh '''
-                    python3 -m venv ${VENV_NAME}
-                    . ${VENV_NAME}/bin/activate
-                    pip install --upgrade pip
-                    pip install -r requirements.txt
-                '''
+                sh 'docker build -t ${FULL_IMAGE} .'
             }
         }
 
-        stage('3. Test') {
+        stage('Pruebas') {
             steps {
-                echo "==> [Jenkins Manual] [TEST] Aquí se simulan las pruebas unitarias..."
-                sh 'echo "Pruebas superadas con éxito en el workspace de Jenkins."'
+                sh '''
+                    mkdir -p reports
+                    docker run --rm \
+                        -v "$WORKSPACE/reports:/app/reports" \
+                        ${FULL_IMAGE} \
+                        pytest --junitxml=reports/results.xml
+                '''
+            }
+            post {
+                always {
+                    junit allowEmptyResults: true, testResults: 'reports/results.xml'
+                }
             }
         }
 
-        stage('4. Deploy (Simulado)') {
+        stage('Publicar imagen') {
+            when { branch 'main' }
             steps {
-                echo "==> [Jenkins Manual] Desplegando en la máquina Kali Linux..."
-                sh '''
-                    sudo mkdir -p ${DEPLOY_DIR}
-                    sudo cp app.py requirements.txt ${DEPLOY_DIR}/
-                    echo "¡Despliegue manual desde Jenkins completado en ${DEPLOY_DIR}!"
-                '''
+                withCredentials([usernamePassword(
+                    credentialsId: 'registry-creds',
+                    usernameVariable: 'REG_USER',
+                    passwordVariable: 'REG_PASS')]) {
+                    sh '''
+                        echo "$REG_PASS" | docker login ${REGISTRY} -u "$REG_USER" --password-stdin
+                        docker push ${FULL_IMAGE}
+                        docker tag ${FULL_IMAGE} ${REGISTRY}/${IMAGE_NAME}:latest
+                        docker push ${REGISTRY}/${IMAGE_NAME}:latest
+                    '''
+                }
+            }
+        }
+
+        stage('Despliegue') {
+            when { branch 'main' }
+            steps {
+                sshagent(credentials: ['deploy-ssh-key']) {
+                    sh '''
+                        ssh -o StrictHostKeyChecking=no deploy@${DEPLOY_HOST} "
+                            docker pull ${FULL_IMAGE} &&
+                            docker stop ${IMAGE_NAME} || true &&
+                            docker rm ${IMAGE_NAME} || true &&
+                            docker run -d --name ${IMAGE_NAME} \
+                                --restart unless-stopped \
+                                -p 8000:8000 ${FULL_IMAGE}
+                        "
+                    '''
+                }
             }
         }
     }
 
     post {
-        success {
-            echo "¡El build manual finalizó correctamente!"
+        always {
+            sh 'docker rmi ${FULL_IMAGE} || true'
+            cleanWs()
         }
         failure {
-            echo "El pipeline falló durante la ejecución manual."
+            echo 'El pipeline falló'
         }
     }
 }
