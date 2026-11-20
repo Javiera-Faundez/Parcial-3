@@ -61,32 +61,20 @@ pipeline {
             }
         }
 
-        stage('Despliegue') {
-            when { branch 'main' }
+        stage('Pruebas') {
             steps {
-                sshagent(credentials: ['deploy-ssh-key']) {
-                    sh '''
-                        ssh -o StrictHostKeyChecking=no deploy@${DEPLOY_HOST} "
-                            docker pull ${FULL_IMAGE} &&
-                            docker stop ${IMAGE_NAME} || true &&
-                            docker rm ${IMAGE_NAME} || true &&
-                            docker run -d --name ${IMAGE_NAME} \
-                                --restart unless-stopped \
-                                -p 8000:8000 ${FULL_IMAGE}
-                        "
-                    '''
+                sh '''
+                    mkdir -p reports
+                    docker run --name test-${BUILD_NUMBER} ${FULL_IMAGE} \
+                        pytest --junitxml=/tmp/results.xml || TEST_RC=$?
+                    docker cp test-${BUILD_NUMBER}:/tmp/results.xml reports/results.xml || true
+                    docker rm -f test-${BUILD_NUMBER}
+                    exit ${TEST_RC:-0}
+                '''
+            }
+            post {
+                always {
+                    junit allowEmptyResults: true, testResults: 'reports/results.xml'
                 }
             }
         }
-    }
-
-    post {
-        always {
-            sh 'docker rmi ${FULL_IMAGE} || true'
-            cleanWs()
-        }
-        failure {
-            echo 'El pipeline falló'
-        }
-    }
-}
