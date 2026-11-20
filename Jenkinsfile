@@ -2,11 +2,9 @@ pipeline {
     agent any
 
     environment {
-        REGISTRY     = 'registry.ejemplo.com'
-        IMAGE_NAME   = 'mi-app'
-        IMAGE_TAG    = "${env.BUILD_NUMBER}"
-        FULL_IMAGE   = "${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
-        DEPLOY_HOST  = 'servidor.ejemplo.com'
+        IMAGE_NAME = 'mi-app'
+        IMAGE_TAG  = "${env.BUILD_NUMBER}"
+        FULL_IMAGE = "${IMAGE_NAME}:${IMAGE_TAG}"
     }
 
     options {
@@ -31,40 +29,6 @@ pipeline {
             steps {
                 sh '''
                     mkdir -p reports
-                    docker run --rm \
-                        -v "$WORKSPACE/reports:/app/reports" \
-                        ${FULL_IMAGE} \
-                        pytest --junitxml=reports/results.xml
-                '''
-            }
-            post {
-                always {
-                    junit allowEmptyResults: true, testResults: 'reports/results.xml'
-                }
-            }
-        }
-
-        stage('Publicar imagen') {
-            when { branch 'main' }
-            steps {
-                withCredentials([usernamePassword(
-                    credentialsId: 'registry-creds',
-                    usernameVariable: 'REG_USER',
-                    passwordVariable: 'REG_PASS')]) {
-                    sh '''
-                        echo "$REG_PASS" | docker login ${REGISTRY} -u "$REG_USER" --password-stdin
-                        docker push ${FULL_IMAGE}
-                        docker tag ${FULL_IMAGE} ${REGISTRY}/${IMAGE_NAME}:latest
-                        docker push ${REGISTRY}/${IMAGE_NAME}:latest
-                    '''
-                }
-            }
-        }
-
-        stage('Pruebas') {
-            steps {
-                sh '''
-                    mkdir -p reports
                     docker run --name test-${BUILD_NUMBER} ${FULL_IMAGE} \
                         pytest --junitxml=/tmp/results.xml || TEST_RC=$?
                     docker cp test-${BUILD_NUMBER}:/tmp/results.xml reports/results.xml || true
@@ -78,3 +42,26 @@ pipeline {
                 }
             }
         }
+
+        stage('Despliegue') {
+            when { branch 'main' }
+            steps {
+                sh '''
+                    docker stop mi-app || true
+                    docker rm mi-app || true
+                    docker run -d --name mi-app --restart unless-stopped \
+                        -p 8000:8000 ${FULL_IMAGE}
+                '''
+            }
+        }
+    }
+
+    post {
+        failure {
+            echo 'El pipeline falló'
+        }
+        cleanup {
+            cleanWs()
+        }
+    }
+}
