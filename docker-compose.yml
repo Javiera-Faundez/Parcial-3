@@ -13,5 +13,5 @@ services:
 
 volumes:
   jenkins_home:
-    external: true   # reutiliza el volumen existente
-    name: jenkins_home   # cambia por el nombre real que viste en el paso 1
+    external: true   
+    name: jenkins_home
